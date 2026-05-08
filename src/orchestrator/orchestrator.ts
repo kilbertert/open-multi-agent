@@ -1470,7 +1470,7 @@ export class OpenMultiAgent {
     const roster = agents
       .map(
         (a) =>
-          `- **${a.name}** (${a.model}): ${a.systemPrompt?.slice(0, 120) ?? 'general purpose agent'}`,
+          `- **${a.name}** (${a.model}): ${a.systemPrompt ?? 'general purpose agent'}`,
       )
       .join('\n')
 
@@ -1489,7 +1489,14 @@ export class OpenMultiAgent {
       '  - "title":       Short descriptive title (string)',
       '  - "description": Full task description with context and expected output (string)',
       '  - "assignee":    One of the agent names listed in the roster (string)',
-      '  - "dependsOn":   Array of titles of tasks this task depends on (string[], may be empty)',
+      '  - "dependsOn":   Array of titles of tasks this task depends on (string[], may be empty).',
+      '',
+      '## Dependency Guidance',
+      'Prefer the minimum set of upstream tasks each assignee needs. When deciding dependsOn for agent X:',
+      '  1. Use X\'s system prompt as the primary signal for what inputs it consumes.',
+      '  2. Lean toward including a task as a dependency only when X\'s system prompt names or describes needing that kind of input.',
+      '  3. Avoid adding a dependency just because the information "would be useful" or matches general best practice; if X\'s system prompt gives no indication it consumes that input, prefer to leave it out.',
+      '  4. When uncertain, prefer fewer dependencies over more — extra parents cost parallelism and tokens.',
       '',
       'Wrap the JSON in a ```json code fence.',
       'Do not include any text outside the code fence.',
