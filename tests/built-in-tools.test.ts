@@ -13,6 +13,10 @@ import {
   BUILT_IN_TOOLS,
   delegateToAgentTool,
 } from '../src/tool/built-in/index.js'
+import {
+  DEFAULT_WORKSPACE_DIRNAME,
+  defaultWorkspaceDir,
+} from '../src/tool/built-in/path-safety.js'
 import { ToolRegistry } from '../src/tool/framework.js'
 import { InMemoryStore } from '../src/memory/store.js'
 import type { AgentRunResult, ToolUseContext } from '../src/types.js'
@@ -444,6 +448,110 @@ describe('filesystem sandbox', () => {
       optOut,
     )
     expect(absResult.data).not.toContain("outside the agent's working directory")
+  })
+
+  it('defaultWorkspaceDir resolves to <cwd>/.agent-workspace', () => {
+    expect(DEFAULT_WORKSPACE_DIRNAME).toBe('.agent-workspace')
+    expect(defaultWorkspaceDir()).toBe(join(process.cwd(), '.agent-workspace'))
+  })
+
+  it('auto-creates the sandbox root on first write when missing', async () => {
+    // Point cwd at a path that does not yet exist. file_write should still
+    // succeed because the sandbox layer mkdir -p's the root on first use.
+    const freshRoot = join(tmpDir, 'fresh-workspace')
+    const ctx: ToolUseContext = {
+      agent: { name: 'test-agent', role: 'tester', model: 'test' },
+      cwd: freshRoot,
+    }
+
+    expect(await fileExists(freshRoot)).toBe(false)
+
+    const result = await fileWriteTool.execute(
+      { path: join(freshRoot, 'hello.txt'), content: 'hi' },
+      ctx,
+    )
+
+    expect(result.isError).toBe(false)
+    expect(await fileExists(freshRoot)).toBe(true)
+    expect(await readFile(join(freshRoot, 'hello.txt'), 'utf8')).toBe('hi')
+  })
+
+  it('falls back to defaultWorkspaceDir when ToolUseContext omits cwd', async () => {
+    // High-level callers (OpenMultiAgent / Agent / AgentRunner) inject a
+    // cwd into ToolUseContext. Low-level callers that go straight to the
+    // exported tool functions (fileReadTool.execute, etc.) may omit it.
+    // In that case the sandbox layer must still narrow to
+    // `<process.cwd()>/.agent-workspace`, not silently fall back to
+    // `process.cwd()` (which would expose the entire host project).
+    const ctx: ToolUseContext = {
+      agent: { name: 'test-agent', role: 'tester', model: 'test' },
+      // cwd intentionally omitted
+    }
+
+    const result = await fileReadTool.execute(
+      { path: join(process.cwd(), 'package.json') },
+      ctx,
+    )
+
+    expect(result.isError).toBe(true)
+    // Whether the .agent-workspace directory happens to exist or not,
+    // the error must reference it (either as the missing root or as the
+    // sandbox root the candidate is outside of).
+    expect(result.data).toContain('.agent-workspace')
+  })
+
+  it('does not auto-create the sandbox root when read-only tools see a missing root', async () => {
+    // file_read, file_edit, grep, and glob must not silently create the
+    // sandbox root on a caller's behalf. Only file_write opts into that
+    // behaviour via `ensureRoot: true`.
+    const freshRoot = join(tmpDir, 'readonly-fresh-workspace')
+    const ctx: ToolUseContext = {
+      agent: { name: 'test-agent', role: 'tester', model: 'test' },
+      cwd: freshRoot,
+    }
+
+    expect(await fileExists(freshRoot)).toBe(false)
+
+    const result = await fileReadTool.execute(
+      { path: join(freshRoot, 'whatever.txt') },
+      ctx,
+    )
+
+    expect(result.isError).toBe(true)
+    expect(result.data).toContain('Could not resolve working directory')
+    expect(await fileExists(freshRoot)).toBe(false)
+  })
+
+  it('default workspace root prevents reading parent-directory files (L2-b core benefit)', async () => {
+    // Simulate the real default-cwd scenario: the agent's sandbox root is
+    // a `.agent-workspace` subdirectory inside an enclosing project root.
+    // Files in the enclosing root (e.g. .env, source files) must not be
+    // reachable just because the host happened to launch from there.
+    const projectRoot = await mkdtemp(join(tmpdir(), 'oma-project-'))
+    try {
+      await writeFile(join(projectRoot, '.env'), 'SECRET=do-not-leak')
+
+      // Pre-create the workspace root so this test exercises the
+      // outside-root rejection path rather than the missing-root path.
+      const workspaceRoot = join(projectRoot, DEFAULT_WORKSPACE_DIRNAME)
+      await mkdir(workspaceRoot, { recursive: true })
+
+      const ctx: ToolUseContext = {
+        agent: { name: 'test-agent', role: 'tester', model: 'test' },
+        cwd: workspaceRoot,
+      }
+
+      const result = await fileReadTool.execute(
+        { path: join(projectRoot, '.env') },
+        ctx,
+      )
+
+      expect(result.isError).toBe(true)
+      expect(result.data).toContain("outside the agent's working directory")
+      expect(result.data).not.toContain('SECRET=do-not-leak')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 })
 

@@ -40,6 +40,7 @@ import { estimateTokens } from '../utils/tokens.js'
 import { redactSensitiveObject, redactSensitiveText } from '../utils/redaction.js'
 import type { ToolRegistry } from '../tool/framework.js'
 import type { ToolExecutor } from '../tool/executor.js'
+import { defaultWorkspaceDir } from '../tool/built-in/path-safety.js'
 
 // ---------------------------------------------------------------------------
 // Tool presets
@@ -128,7 +129,8 @@ export interface RunnerOptions {
   readonly disallowedTools?: readonly string[]
   /**
    * Root directory passed to built-in filesystem tools via `ToolUseContext.cwd`.
-   * `null` disables the sandbox; `undefined` falls back to `process.cwd()`.
+   * `null` disables the sandbox; `undefined` falls back to
+   * `<process.cwd()>/.agent-workspace`.
    */
   readonly cwd?: string | null
   /** Display name of the agent driving this runner (used in tool context). */
@@ -1337,7 +1339,7 @@ export class AgentRunner {
         model: this.options.model,
       },
       abortSignal: options.abortSignal ?? this.options.abortSignal,
-      cwd: this.options.cwd === undefined ? process.cwd() : this.options.cwd,
+      cwd: this.options.cwd === undefined ? defaultWorkspaceDir() : this.options.cwd,
       ...(options.team !== undefined ? { team: options.team } : {}),
     }
   }
