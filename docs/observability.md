@@ -106,6 +106,108 @@ Core also exports `CompositeSink`, `FilteringSink`,
 `SensitiveDataProcessor`, and `LegacyCallbackTraceSink`, both from the package
 root and the explicit `@open-multi-agent/core/observability` subpath.
 
+## TraceStore query and reference storage
+
+`TraceStore` is the storage-medium-independent persistence and query contract
+for v2 `TraceRecord` batches. Core includes `InMemoryTraceStore` as the reference
+implementation and `TraceStoreExporter` as the bridge into
+`BatchingTraceSink`:
+
+```typescript
+import {
+  BatchingTraceSink,
+  InMemoryTraceStore,
+  TraceStoreExporter,
+} from '@open-multi-agent/core/observability'
+
+const store = new InMemoryTraceStore()
+const sink = new BatchingTraceSink(new TraceStoreExporter(store))
+
+// Configure sink under observability.sinks, run work, then flush its watermark.
+await sink.forceFlush({ timeoutMs: 1_000 })
+const page = await store.queryRuns({
+  status: ['error', 'timeout'],
+  agent: ['researcher'],
+  limit: 50,
+})
+```
+
+`InMemoryTraceStore` is not durable and is not a production database. It is
+intended for unit tests, local inspection, and short-lived processes. It has no
+filesystem or database dependency, and it returns copies rather than mutable
+references to its internal records.
+
+### Append, schema, and materialization
+
+`append(records)` accepts a batch atomically: validation failure leaves the
+whole batch invisible. Schema major `2` is supported; another major is rejected
+with `TraceStoreError(code = 'UNSUPPORTED_SCHEMA_VERSION')`. Unknown fields on
+schema-v2 records are retained so additive minor evolution can round-trip.
+
+`recordId` is the idempotency key. Re-exporting a previously accepted batch is
+a successful no-op for those records. If the same span receives more than one
+distinct `span_end`, the first accepted end wins and append returns a
+`duplicate_span_end` diagnostic; the later end cannot change the materialized
+Agent or Run outcome.
+
+Materialization sorts records within each trace by `sequence`, independent of
+arrival order. An end record is self-contained, so an end-only span is complete.
+A start with no accepted end remains incomplete. A logical `runId` groups all
+attempts and trace identities, including restore continuations. Parentage and
+`continued_from`, `depends_on`, `delegated_from`, and `consumed` links are
+preserved on materialized spans. The run terminal status is the latest attempt's
+actual root end status; it is absent when that record is missing and is never
+invented as `ok`.
+
+Run summaries include start/end/duration, attempts and trace/root identity,
+terminal status when present, agent/task/model/provider values actually found
+in attributes, LLM token and cost facts, incomplete state, and schema version.
+Only LLM end records contribute token/cost totals, avoiding double-counting
+agent or run rollups.
+
+### Filters, ordering, and opaque cursors
+
+`queryRuns` supports combined `runId`, ISO time range, status, agent, task ID,
+model, and provider filters. `startedAfter` is inclusive; `startedBefore` is
+exclusive. The default page size is 50 (maximum 500). Stable ordering is
+`(startedAt, runId)`, descending by default; `started_asc` reverses both parts
+of that key, so equal timestamps always have a deterministic tie-breaker.
+
+The cursor is opaque, store-instance-specific, and bound to the filter/order
+that created it. Invalid, tampered, or mismatched cursors reject with
+`TraceStoreError(code = 'INVALID_CURSOR')`. The first page captures an append
+revision: records appended while later pages are read do not appear in that
+pagination walk, preventing duplicates and omissions. A fresh query sees them.
+Deletes are immediately consistent and invalidate outstanding cursors; the
+append snapshot does not claim a transaction across concurrent delete or
+retention operations.
+
+### Delete and retention
+
+`deleteRun(runId)` removes every attempt for one logical run. `delete(query)`
+bulk-deletes logical runs using the same frozen filters as queries, without
+cursor, order, or limit. Both are idempotent, and successful deletion is
+immediately reflected by `getRun` and `queryRuns`.
+
+Retention accepts `maxAgeMs`, `maxRuns`, and an optional terminal-status scope.
+Age uses the injected store clock and run start time. `maxRuns` keeps the newest
+matching runs by the same stable ordering; age and count deletion sets are
+combined. A status-only policy deletes runs with those actual terminal statuses
+and does not match incomplete runs with no status. Deletion order is oldest
+first with `runId` as the tie-breaker, and repeated application is safe.
+
+TraceStore retention only affects that store. It cannot delete copies already
+exported to OTel or another vendor.
+
+### TraceStore is not RunStore or CheckpointStore
+
+TraceStore is append/query telemetry and can be best-effort. A future RunStore
+is the authoritative durable state machine with CAS, lease, suspend, and resume
+semantics; TraceStore deliberately provides none of those. CheckpointStore
+persists execution state used to restore work. Losing telemetry must not roll
+back a durable run, and deleting traces must not imply deleting checkpoints or
+shared memory.
+
 ## Flush and shutdown
 
 `forceFlush({ timeoutMs })` captures an acceptance watermark. It promises that

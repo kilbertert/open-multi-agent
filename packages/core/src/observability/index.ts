@@ -35,3 +35,27 @@ export type {
   TraceFilter,
 } from './processors.js'
 export { LegacyCallbackTraceSink } from './legacy-callback.js'
+export { materializeRun } from './materialize.js'
+export { InMemoryTraceStore } from './in-memory-store.js'
+export type { InMemoryTraceStoreOptions } from './in-memory-store.js'
+export { TraceStoreExporter } from './store-exporter.js'
+export { TRACE_STORE_SCHEMA_MAJOR, TraceStoreError } from './store.js'
+export type {
+  AppendResult,
+  DeleteResult,
+  GetRunOptions,
+  MaterializedSpan,
+  Page,
+  RetentionPolicy,
+  RunAttemptSummary,
+  RunCostSummary,
+  RunSummary,
+  RunTokenSummary,
+  StoredRun,
+  TraceDeleteQuery,
+  TraceQuery,
+  TraceStore,
+  TraceStoreDiagnostic,
+  TraceStoreDiagnosticCode,
+  TraceStoreErrorCode,
+} from './store.js'

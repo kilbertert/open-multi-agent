@@ -568,6 +568,7 @@ export class AgentRunner implements AgentBackend {
       attributes: {
         'oma.agent.name': options.traceAgent ?? this.options.agentName ?? 'unknown',
         'oma.llm.model': chatOptions.model,
+        'oma.llm.provider': this.adapter.name,
         'oma.phase': phase,
         'oma.llm.turn': turn,
         ...(options.taskId ? { 'oma.task.id': options.taskId } : {}),
