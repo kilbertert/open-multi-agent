@@ -1,4 +1,4 @@
-import { context, SpanStatusCode, trace } from '@opentelemetry/api'
+import { ROOT_CONTEXT, SpanStatusCode, trace } from '@opentelemetry/api'
 import type {
   Attributes,
   Span,
@@ -284,7 +284,9 @@ export class OTelTraceExporter implements TraceExporter {
     const parent = record.parentSpanId
       ? this.spanContexts.get(spanKey(record.traceId, record.parentSpanId))
       : undefined
-    const parentContext = parent ? trace.setSpanContext(context.active(), parent) : undefined
+    // Root spans must not parent under whatever application span happens to be
+    // active at export time; batching makes that ambient context arbitrary.
+    const parentContext = parent ? trace.setSpanContext(ROOT_CONTEXT, parent) : ROOT_CONTEXT
     const attributes: Attributes = {
       ...spanAttributes(record),
       ...this.metadata,

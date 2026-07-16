@@ -1,11 +1,11 @@
-import { SpanStatusCode, TraceFlags } from '@opentelemetry/api'
+import { context, ROOT_CONTEXT, SpanStatusCode, TraceFlags, trace } from '@opentelemetry/api'
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base'
 import { describe, expect, it } from 'vitest'
-import type { Tracer } from '@opentelemetry/api'
+import type { Context, ContextManager, Tracer } from '@opentelemetry/api'
 import type {
   SpanEndRecord,
   SpanEventRecord,
@@ -140,6 +140,32 @@ describe('@open-multi-agent/otel', () => {
     expect(() => createOtelTraceExporter({})).toThrow(/exactly one of tracer or tracerProvider/)
     const { provider } = inMemory()
     expect(() => createOtelTraceExporter({ tracer: provider.getTracer('test'), tracerProvider: provider })).toThrow(/exactly one/)
+  })
+
+  it('starts OMA root spans from ROOT_CONTEXT instead of the ambient application span', async () => {
+    const { exporter, provider } = inMemory()
+    const appSpan = provider.getTracer('app').startSpan('app.request')
+    const ambient = trace.setSpan(ROOT_CONTEXT, appSpan)
+    const manager: ContextManager = {
+      active: () => ambient,
+      with: (_context, fn, thisArg, ...args) => fn.call(thisArg, ...args),
+      bind: <T>(_context: Context, target: T) => target,
+      enable: () => manager,
+      disable: () => manager,
+    }
+    expect(context.setGlobalContextManager(manager)).toBe(true)
+    try {
+      const adapter = createOtelTraceExporter({ tracerProvider: provider })
+      await exportRecords(adapter, [
+        start(ROOT_SPAN_ID, 'oma.run', 'run'),
+        end(ROOT_SPAN_ID, 'oma.run', 'run'),
+      ])
+    } finally {
+      context.disable()
+      appSpan.end()
+    }
+    const root = exporter.getFinishedSpans().find((span) => span.name === 'oma.run')!
+    expect(root.parentSpanContext).toBeUndefined()
   })
 
   it('maps the full OMA hierarchy, links, event records, and OMA correlation attributes with the official in-memory exporter', async () => {
